@@ -1,0 +1,245 @@
+---
+title: "Coursera 'Practical Machine Learning' Course - Final Project"
+author: "Paolo Guderzo"
+date: "11 aprile 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+## Overview
+
+This document is the report about the final project of the Practical Machine Learning Coursera course that is part of the Data Science Specialization track by John Hopkins University.
+
+---
+
+## Project introduction
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Goal
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+### Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+---
+
+## Data Management
+
+### Environment setup
+
+```{r loadLibraries, warning = FALSE}
+rm(list = ls())
+library(caret)
+library(rattle)
+library(rpart)
+library(randomForest)
+```
+
+&nbsp;
+
+### Data preparation
+
+#### Data loading
+
+```{r loadData}
+# Set the urls
+trainingSetUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingSetUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# Download data
+trainingData <- read.csv(url(trainingSetUrl), header=TRUE)
+testingData <- read.csv(url(testingSetUrl), header=TRUE)
+dim(trainingData)
+dim(testingData)
+str(trainingData)
+str(testingData)
+
+``` 
+
+&nbsp;
+
+#### Data Cleaning
+
+Notes:
+
+* the training data contains `r nrow(trainingData)` observations with `r ncol(trainingData)` variables. An overview of the dataset shows that a lot of variables contain NA values or blank values, that are unuseful for our goal (no information at all). We will proceed with their removal;
+* in the training data, we will use 'nzv' function in order to locate predictors that have unique value or very few unique values (see [https://www.rdocumentation.org/packages/caret/versions/6.0-85/topics/nearZeroVar]);
+* finally, we will remove the first 7 variables that give unuseful information (for our goal) about:
+
+    * people involved into the test;
+    * timestamps.
+
+
+
+```{r cleanData}
+# Before proceeding, we check if the two datasets have the same variables.
+tempData <- trainingData
+diffCols <- colnames(tempData) == colnames(testingData)
+indCols <- which(diffCols == FALSE)
+
+# The datasets differ each other only for a variable (no. 160). This variable is our outcome (Classe) in the training data; instead, in the testing data, the variable is only a row id. So we can remove it.
+testingData <- testingData[, -indCols]
+
+# Then we remove the first seven variables of the dataset because they are not interesting for our goal
+tempData <- tempData[, -c(1:7)]
+
+# Use nzv function to identify predictors with near zero variance and to remove them from training data
+nzv_df <- nearZeroVar(tempData, saveMetrics = TRUE)
+tempData <- tempData[,nzv_df$nzv == FALSE]
+
+# Remove variables that have more than 95% of values equal to null or blank
+nrRows <- nrow(tempData)
+idxVars <- which(colSums(is.na(tempData) | tempData == "") > 0.95 * nrRows)
+tempData <- tempData[, -idxVars]
+
+# Now we want to have the same variables between the two datasets. So we identify the columns of training data but we have to delete the lsast column (Classe variable) that does not exist in the testing dataset
+meaningfulVars <- colnames(tempData[, -53])
+testingData <- testingData[meaningfulVars]
+trainingData <- tempData
+rm(tempData)
+
+dim(trainingData)
+dim(testingData)
+
+```
+
+&nbsp;
+
+#### Data slicing
+
+```{r sliceData}
+# Now we create the two datasets where to train and test the algorithms
+set.seed(1959)
+inTrain <- createDataPartition(trainingData$classe, p=0.7, list=FALSE)
+trainingData_train <- trainingData[inTrain, ]
+dim(trainingData_train)
+trainingData_test <- trainingData[-inTrain, ]
+dim(trainingData_test)
+```
+
+---
+
+## Model Building
+
+In order to model the data, we will use and test three methods:
+
+* decision trees;
+* random forests;
+* gradient boosting method. 
+
+We will use these methods via caret package. Moreover, we will use 'cross validation' tecnique in order to reduce overfitting. 
+
+### Decision tree
+
+```{r decisionTree_FitModel}
+# Train model
+trControl <- trainControl(method = "cv", number = 5)
+modFit_rpart <- train(classe ~ ., data = trainingData_train, method = "rpart", trControl = trControl)
+
+# Plot model
+fancyRpartPlot(modFit_rpart$finalModel)
+```
+
+Then we apply the decision tree model on test data in order to evaluate the performamance on new data using the 'accuracy' index.
+
+```{r decisionTree_Predict}
+pred_rpart <- predict(modFit_rpart, newdata = trainingData_test)
+cm_rpart <- confusionMatrix(pred_rpart, trainingData_test$classe)
+
+# Display confusion matrix
+cm_rpart$table
+
+# Display accuracy index
+cm_rpart$overall['Accuracy']
+```
+
+The  **accuracy** about this first model is not so good (about **50%**). The **out of sample error rate** is about **0.4981** that is not a good result. Let's try with the random forests model. 
+
+### Random forests
+
+```{r randomForest_FitModel}
+# Train model
+trControl <- trainControl(method = "cv", number = 5)
+modFit_rf <- train(classe ~ ., data = trainingData_train, method = "rf", trControl = trControl, verboseIter=FALSE)
+
+# Plot model
+plot(modFit_rf,main="Accuracy of Random forest model by number of predictors")
+```
+
+Then we apply the random forest model on test data in order to evaluate the performamance on new data using the 'accuracy' index.
+
+```{r randomForest_Predict}
+pred_rf <- predict(modFit_rf, newdata = trainingData_test)
+cm_rf <- confusionMatrix(pred_rf, trainingData_test$classe)
+
+# Display confusion matrix
+cm_rf$table
+
+# Display accuracy index
+cm_rf$overall['Accuracy']
+
+# Diaplay values about the variable 'Classe'
+modFit_rf$finalModel$classes
+
+# Display the most important variable
+varImp(modFit_rf)
+
+```
+Notes about this second model:
+
+* the **accuracy** index is clearly better than the first model (above **99%**). So the **out of sample error rate** is about **0,0062**, very good;
+* the accuracy index is substantially stable up to about 27 predictors; after that, the accuracy rapidly decreases;
+
+Let's try with the last method.
+
+### Gradient Boosting
+
+```{r gradientBoosting_FitModel}
+# Train model
+trControl <- trainControl(method = "cv", number = 5)
+modFit_gbm <- train(classe ~ ., data = trainingData_train, method = "gbm", trControl = trControl, verbose = FALSE)
+
+# Plot model
+plot(modFit_gbm)
+```
+
+Then we apply the gradient boosting model on test data in order to evaluate the performance on new data using the 'accuracy' index.
+
+```{r gradientBoosting_Predict}
+pred_gbm <- predict(modFit_gbm, newdata = trainingData_test)
+cm_gbm <- confusionMatrix(pred_gbm, trainingData_test$classe)
+
+# Display confusion matrix
+cm_gbm$table
+
+# Display accuracy index
+cm_gbm$overall['Accuracy']
+
+# Diaplay values about the variable 'Class'
+modFit_gbm$finalModel$classes
+
+```
+
+Here we have an **accuracy** index about **0.9649**. So, the **out of sample error rate** is about **0,0351** (very good).
+At last, the best model is clearly the random forests model. So, we use it in order to predict the value about the given test set.
+
+```{r predictTestSet}
+finalPrediction <- predict(modFit_rf, testingData)
+finalPrediction
+
+```
+
